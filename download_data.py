@@ -1,12 +1,12 @@
 # download_data.py
 # Download and merge the raw fec data with the candidate information to 
 # get a complete picture of the election results.
+# Windows/MacOS/Linux
+# Python 3.10
 
 
 from datetime import datetime
 import io
-import os
-import re
 import sqlite3
 from typing import List, Optional
 import zipfile
@@ -14,7 +14,6 @@ import zipfile
 from bs4 import BeautifulSoup
 import pandas as pd
 import requests
-from tqdm import tqdm
 
 
 # Database configuration and global variables.
@@ -400,8 +399,6 @@ def download_and_ingest_fec_bulk_data(
 				print(f"\tERROR processing {file_id}: {e}")
 				mark_manifest_status(conn, file_id, f_type, year, 0, f"FAILED: {str(e)[:100]}")
 
-	pass
-
 
 def main():
 	# Establish database connection and initialize manifest table.
@@ -427,8 +424,8 @@ def main():
 	)
 
 	# Reclaim and optimize.
-	print("Optimizing database file structure with VACUUM...")
-	conn.execute("VACUUM;")
+	# print("Optimizing database file structure with VACUUM...")
+	# conn.execute("VACUUM;")
 	conn.close()
 	print("Ingestion complete. All datasets stored inside SQLite.")
 
