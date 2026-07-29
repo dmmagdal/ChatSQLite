@@ -1,0 +1,10 @@
+# Environment files/folders
+**/.vscode
+**/.DS_Store
+**/__pycache__/
+
+# Database files
+**/*.sqlite
+**/*.db
+**/*.db-shm
+**/*.db-wal
