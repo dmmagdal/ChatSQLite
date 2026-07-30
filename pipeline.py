@@ -4,11 +4,14 @@
 # Python 3.10
 
 
+import json
 import re
 import sqlite3
 from typing import List, Union, Generator, Iterator
 
 import pandas as pd
+import plotly.express as px
+import plotly.io as pio
 from pydantic import BaseModel, Field
 import requests
 import sqlglot
@@ -185,6 +188,82 @@ DATABASE SCHEMA:
 		if df.empty: 
 			return f"### Query Executed\n```sql\n{sql_query}\n```\n\n**Result:** No matching records found."
 
-		
-		pass
+		# Prepare markdown data,
+		head_limit = 15
+		display_df = df.head(head_limit)
+		markdown_table = display_df.to_markdown(index=False)
+		table_note = f"\n\n*Showing top {len(display_df)} of {len(df)} total rows.*" if len(df) > head_limit else ""
+
+		# Have the LLM generate an executive summary of the dataset.
+		summary_prompt = f"""Analyze the dataset returned for the question: "{user_prompt}"
+Data Sample (Top 5 Rows):
+{df.head(5).to_json(orient='records')}
+
+Task:
+1. Write a concise 2-3 sentence executive summary.
+2. Recommend a chart type ('bar', 'line', 'pie', 'scatter', or 'none') to visualize this result.
+Respond in JSON format with keys: "summary", "chart_type", "x_col", "y_col", "title".
+"""
+		summary_raw = self._call_ollama("You are a Data Analyst. Return valid JSON only.", summary_prompt)
+
+		try:
+			json_match = re.search(r"\{.*\}", summary_raw, re.DOTALL)
+			chart_config = json.loads(json_match.group(0)) if json_match else {}
+		except Exception:
+			chart_config = {"summary": "Data retrieved successfully.", "chart_type": "none"}
+
+		chart_html = ""
+		chart_type = chart_config.get("chart_type", "none")
+		x_col = chart_config.get("x_col")
+		y_col = chart_config.get("y_col")
+		chart_title = chart_config.get("title", f"{y_col} by {x_col}" if x_col and y_col else "Data Visualization")
+
+		# Validate that selected columns exist in the DataFrame
+		if chart_type != "none" and x_col in df.columns and y_col in df.columns:
+			plot_df = df.head(20)  # Restrict plot points to keep UI responsive
+
+			if chart_type == "bar":
+				fig = px.bar(plot_df, x=x_col, y=y_col, title=chart_title, template="plotly_dark")
+			elif chart_type == "line":
+				fig = px.line(plot_df, x=x_col, y=y_col, title=chart_title, template="plotly_dark")
+			elif chart_type == "pie":
+				fig = px.pie(plot_df, names=x_col, values=y_col, title=chart_title, template="plotly_dark")
+			elif chart_type == "scatter":
+				fig = px.scatter(plot_df, x=x_col, y=y_col, title=chart_title, template="plotly_dark")
+			else:
+				fig = None
+
+			if fig:
+				# Custom dark styling to blend seamlessly into Open WebUI's dark mode
+				fig.update_layout(
+					paper_bgcolor="rgba(24, 24, 37, 1)",
+					plot_bgcolor="rgba(24, 24, 37, 1)",
+					font_color="#cdd6f4",
+					margin=dict(l=40, r=40, t=50, b=40)
+				)
+
+				# Export to an HTML snippet. 
+				# full_html=False creates a <div> block without <html>/<head> tags.
+				# include_plotlyjs='cdn' fetches the JS engine externally so your response payload stays tiny.
+				raw_plotly_html = pio.to_html(fig, full_html=False, include_plotlyjs="cdn")
+				
+				# Wrap in markdown ```html block so Open WebUI renders it automatically
+				chart_html = f"\n```html\n{raw_plotly_html}\n```\n"
+
+		return f"""### 📊 Executive Summary
+{chart_config.get('summary', '')}
+
+{chart_html}
+
+### 📋 Data Table
+{markdown_table}{table_note}
+
+<details>
+<summary><b>🔍 View Generated SQL Query</b></summary>
+
+```sql
+{sql_query}
+```
+</details>
+"""
 
