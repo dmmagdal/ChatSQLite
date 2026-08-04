@@ -17,21 +17,21 @@ import requests
 import sqlglot
 from sqlglot import exp
 
-from helper import get_db_schema, is_read_only_query
+from helper import *
 
 
 class Pipeline:
 	class Valves(BaseModel):
 		OLLAMA_BASE_URL: str = Field(
-			default="",
+			default="http://localhost:11434",
 			description="Base URL for the Ollama API.",
 		)
 		MODEL_NAME: str = Field(
-			default="",
+			default="qwen2.5-coder:7b",
 			description="Name of the model to use with the Ollama API.",
 		)
 		DB_PATH: str = Field(
-			default="",
+			default="fec_data.db",
 			description="Path to the SQLite database file.",
 		)
 		MAX_RETRIES: int = Field(
@@ -51,6 +51,43 @@ class Pipeline:
 
 	async def on_shutdown(self) -> None:
 		print(f"Stopped {self.name}.")
+
+
+	def pipe(
+		self, 
+		user_message: str, 
+		model_id: str, 
+		messages: List[dict], 
+		body: dict
+	) -> Union[str, Generator, Iterator]:
+		"""Main entry point called by Open WebUI."""
+		try:
+			# Get schema context
+			# schema_str = get_db_schema()
+			# metadata_schema_str = get_metadata_db_schema()
+			# metadata_tables = get_metadata()
+
+			selected_tables = self._select_relevant_tables(user_message)
+			print(f"Selected tables for user request: {selected_tables}")
+			print(f"all tables: {get_tables()}")
+
+			filtered_schema = get_db_schema(selected_tables)
+			filtered_metadata = get_metadata(selected_tables)
+
+			# print(f"Database schema retrieved:\n{schema_str}")
+			print(f"Filtered database schema:\n{filtered_schema}")
+			print(f"Filtered metadata:\n{filtered_metadata}")
+
+			# Agent 1 & 2: Generate and heal SQL
+			# sql_query, df = self._agent_generate_and_heal_sql(user_message, schema_str, metadata_tables)
+			sql_query, df = self._agent_generate_and_heal_sql(user_message, filtered_schema, filtered_metadata)
+
+			# Agent 3: Generate Plotly charts and markdown reports
+			return self._agent_generate_visualizations_and_reports(user_message, sql_query, df)
+
+		except Exception as e:
+			return f"❌ **Pipeline Execution Error:** {str(e)}"
+
 
 
 	###################################################################
@@ -73,16 +110,18 @@ class Pipeline:
 			],
 			"stream": False,
 			"options": {
-				"temperature": 1.0
+				"temperature": 0.1#1.0
 			}
 		}
 
 		# Send the request to the Ollama API.
 		response = requests.post(
-			f"{self.valves.OLLAMA_BASE_URL}/v1/chat",
+			f"{self.valves.OLLAMA_BASE_URL}/api/chat/",
 			json=payload,
-			timeout=120,
+			timeout=300,
 		)
+		if response.status_code != 200:
+			print(f"Error response from Ollama API: {response.text}")
 
 		# Raise an exception if the request failed and return the 
 		# content of the response.
@@ -98,8 +137,8 @@ class Pipeline:
 		"""
 		# Establish a read-only connection to the SQLite database.
 		conn = sqlite3.connect(f"file:{self.valves.DB_PATH}?mode=ro", uri=True)
-		conn.execute("PRAGMA read_only = TRUE;")
-		# conn.execute("PRAGMA query_only = TRUE;")
+		# conn.execute("PRAGMA read_only = TRUE;")
+		conn.execute("PRAGMA query_only = TRUE;")
 		# conn.execute("PRAGMA foreign_keys = ON;")
 		# conn.execute("PRAGMA journal_mode = WAL;")
 		# conn.execute("PRAGMA synchronous = NORMAL;")
@@ -132,7 +171,41 @@ class Pipeline:
 	# Agentic stages.
 	###################################################################
 
-	def _agent_generate_and_heal_sql(self, user_prompt: str, schema_str: str) -> str:
+	def _select_relevant_tables(self, user_prompt: str) -> List[str]:
+		"""
+		Select relevant tables based on the user's prompt.
+		@param user_prompt: The user's natural language request.
+		@return: A list of relevant table names.
+		"""
+		all_tables = get_tables()
+		all_metadata = get_metadata()
+
+		system_prompt = f"""You are a Database Router.
+Given a user's analytical question, identify which database tables from the list below are necessary to answer it.
+
+{all_metadata}
+
+Respond ONLY with a JSON array of string table names. Example: ["fec_cm", "fec_pas2"]"""
+
+		raw_response = self._call_ollama(system_prompt, f"User Request: {user_prompt}")
+		
+		try:
+			match = re.search(r"\[.*?\]", raw_response, re.DOTALL)
+			if match:
+				selected_tables = json.loads(match.group(0))
+				# Filter to ensure only valid tables in the DB are returned
+				valid_tables = [t for t in selected_tables if t in all_tables]
+				if valid_tables:
+					return valid_tables
+	
+		except Exception as e:
+			print(f"Table routing fallback triggered: {e}")
+
+		# Fallback to returning all tables if routing fails or yields empty results.
+		return all_tables
+
+
+	def _agent_generate_and_heal_sql(self, user_prompt: str, schema_str: str, metadata_schema_str: str) -> str:
 		"""
 		Generate SQL and handle self healing retries if syntax errors 
 			or schema mismatches are returned by SQLite.
@@ -141,6 +214,9 @@ class Pipeline:
 		@return: A valid SQL query string that adheres to the schema 
 			and rules.
 		"""
+		# NOTE
+		# It is important that any additional context or schema information is included in the system prompt to ensure 
+		# the LLM is aware of the relationship between tables and their columns in order to generate valid SQL queries.
 		system_prompt = f"""You are a SQLite Data Analyst Agent.
 Your job is to generate a SINGLE valid SQLite SELECT query based on the user's request.
 
@@ -148,6 +224,9 @@ CRITICAL RULES:
 1. Output ONLY the raw SQL query inside a ```sql ``` code block.
 2. NEVER issue INSERT, UPDATE, DELETE, DROP, ALTER, or PRAGMA statements.
 3. Keep results limited to 100 rows unless explicitly performing aggregated SUM/COUNT queries.
+
+TABLE METADATA:
+{metadata_schema_str}
 
 DATABASE SCHEMA:
 {schema_str}
@@ -160,16 +239,19 @@ DATABASE SCHEMA:
 			# response.
 			raw_response = self._call_ollama(system_prompt, current_prompt)
 			sql_query = self._clean_sql(raw_response)
+			print(sql_query)
 
 			# Security Guardrail Check.
 			if not is_read_only_query(sql_query):
 				error_msg = "Security Exception: Query failed read-only AST check."
 				current_prompt = f"Previous SQL: {sql_query}\nError: {error_msg}\nPlease rewrite to use strictly SELECT statements."
+				print(current_prompt)
 				continue
 
 			# Execution Check.
 			try:
 				df = self._execute_read_only(sql_query)
+				print(df.head())
 				return sql_query, df
 			except Exception as e:
 				error_msg = str(e)
@@ -180,6 +262,7 @@ DATABASE SCHEMA:
 					f"SQLite Error: {error_msg}\n\n"
 					f"Please correct the query syntax or column references and try again."
 				)
+				print(current_prompt)
 
 		raise RuntimeError(f"Self-healing SQL failed after {self.valves.MAX_RETRIES} attempts:\n" + "\n".join(error_history))
 

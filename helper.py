@@ -5,6 +5,7 @@
 
 
 import sqlite3
+from typing import List
 
 import pandas as pd
 import sqlglot
@@ -13,6 +14,7 @@ from sqlglot import exp
 
 # Database configuration and global variables.
 DB_PATH = "fec_data.db"
+DB_PATH_METADATA = "fec_metadata.db"
 
 
 def get_connection() -> sqlite3.Connection:
@@ -44,7 +46,9 @@ def get_db_schema() -> str:
 
 	# Retrieve the SQL schema for all tables in the database.
 	schema = "\n".join(
-		conn.execute("SELECT sql FROM sqlite_master WHERE type='table';").fetchall()
+		result[0] 
+		for result in conn.execute("SELECT sql FROM sqlite_master WHERE type='table';").fetchall()
+		if isinstance(result, tuple) and len(result) == 1 and isinstance(result[0], str)
 	)
 
 	# Close connection.
@@ -52,6 +56,194 @@ def get_db_schema() -> str:
 
 	# Return the schema.
 	return schema
+
+
+def get_tables() -> List[str]:
+	"""
+	Retrieve the list of table names from the database.
+	@param: takes no arguments.
+	@return: List of table names as strings.
+	"""
+	# Establish connection.
+	conn = get_connection()
+
+	# Retrieve the list of table names in the database.
+	tables = [
+		result[0] 
+		for result in conn.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()
+		if isinstance(result, tuple) and len(result) == 1 and isinstance(result[0], str)
+	]
+
+	# Close connection.
+	conn.close()
+
+	# Return the list of table names.
+	return tables
+
+
+def get_metadata_connection() -> sqlite3.Connection:
+	"""
+	Establish and return a connection to the metadata SQLite database.
+	@param: takes no arguments.
+	@return: sqlite3.Connection object.
+	"""
+	# Establish connection to database.
+	conn = sqlite3.connect(DB_PATH_METADATA)
+
+	# Set SQLite pragmas for performance and reliability.
+	conn.execute("PRAGMA page_size = 16384;")		# 16KB pages for higher compression.
+	conn.execute("PRAGMA journal_mode = WAL;")		# Fast concurrent writes.
+	conn.execute("PRAGMA synchronous = NORMAL;")	# Balance between performance and data safety.
+
+	# Return connection.
+	return conn
+
+
+def get_metadata_db_schema() -> str:
+	"""
+	Retrieve the schemas of all tables in the metadata database.
+	@param: takes no arguments.
+	@return: str containing the SQL schema of all tables.
+	"""
+	# Establish connection.
+	conn = get_metadata_connection()
+
+	# Retrieve the SQL schema for all tables in the database.
+	schema = "\n".join(
+		result[0] 
+		for result in conn.execute("SELECT sql FROM sqlite_master WHERE type='table';").fetchall()
+		if isinstance(result, tuple) and len(result) == 1 and isinstance(result[0], str)
+	)
+
+	# Close connection.
+	conn.close()
+
+	# Return the schema.
+	return schema
+
+
+def get_metadata() -> str:
+	"""
+	Retrieve the metadata from the metadata database.
+	@param: takes no arguments.
+	@return: str containing the metadata of all tables.
+	"""
+	# Establish connection.
+	conn = get_metadata_connection()
+
+	# Get the list of tables in the metadata database.
+	tables = get_metadata_tables()
+
+	# Initialise the metadata string to accumulate results.
+	metadata = ""
+
+	# Iterate through each table and retrieve its metadata.
+	for table in tables:
+		# Retrieve the metadata for all tables in the database.
+		# print(f"Metadata table found: {table}")
+		metadata += f"\n--- Metadata for table: {table.rstrip('_table')} ---\n"
+		metadata += "\n".join(
+			"|".join(str(item) for item in result)
+			for result in conn.execute(f"SELECT * FROM {table};").fetchall()
+			if isinstance(result, tuple)
+		)
+		metadata += "\n"	# Add a newline between tables for clarity.
+
+	# Close connection.
+	conn.close()
+
+	# Return the metadata.
+	return metadata
+
+
+def get_metadata_tables() -> List[str]:
+	"""
+	Retrieve the list of table names from the metadata database.
+	@param: takes no arguments.
+	@return: List of table names as strings.
+	"""
+	# Establish connection.
+	conn = get_metadata_connection()
+
+	# Retrieve the list of table names in the database.
+	tables = [
+		result[0] 
+		for result in conn.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()
+		if isinstance(result, tuple) and len(result) == 1 and isinstance(result[0], str)
+	]
+
+	# Close connection.
+	conn.close()
+
+	# Return the list of table names.
+	return tables
+
+
+def get_filtered_db_schema(tables: List[str]) -> str:
+	"""
+	Retrieve the schemas of specified tables in the database.
+	@param tables: List of table names to retrieve schemas for.
+	@return: str containing the SQL schema of specified tables.
+	"""
+	if not tables:
+		return get_db_schema()
+
+	# Establish connection.
+	conn = get_connection()
+
+	# Retrieve the SQL schema for specified tables in the database.
+	placeholders = ','.join('?' for _ in tables)
+	schema = "\n".join(
+		result[0] 
+		for result in conn.execute(
+			f"SELECT sql FROM sqlite_master WHERE type='table' AND name IN ({placeholders});", 
+			tables
+		).fetchall()
+		if isinstance(result, tuple) and len(result) == 1 and isinstance(result[0], str)
+	)
+
+	# Close connection.
+	conn.close()
+
+	# Return the schema.
+	return schema
+
+
+def get_filtered_metadata(tables: List[str]) -> str:
+	"""
+	Retrieve the metadata for specified tables in the metadata database.
+	@param tables: List of table names to retrieve metadata for.
+	@return: str containing the metadata of specified tables.
+	"""
+	if not tables:
+		return ""
+
+	# Establish connection.
+	conn = get_metadata_connection()
+	all_metadata_tables = get_metadata_tables()
+
+	# Initialise the metadata string to accumulate results.
+	metadata = ""
+
+	# Iterate through each specified table and retrieve its metadata.
+	for table in tables:
+		meta_table = f"{table}_table"
+
+		if meta_table not in all_metadata_tables:
+			# Retrieve the metadata for the specified table in the database.
+			metadata += f"\n--- Metadata for table: {table} ---\n"
+			metadata += "\n".join(
+				"|".join(str(item) for item in result)
+				for result in conn.execute(f"SELECT * FROM {table};").fetchall()
+				if isinstance(result, tuple)
+			)
+			metadata += "\n"  # Add a newline between tables for clarity.
+
+	# Close connection.
+	conn.close()
+
+	# Return the metadata.
+	return metadata
 
 
 def is_read_only_query(query: str) -> bool:
@@ -63,10 +255,19 @@ def is_read_only_query(query: str) -> bool:
 	try:
 		# Parse the query. 
 		parsed_statements = sqlglot.parse(query, dialect="sqlite")
+		print(parsed_statements)
 
 		# If the parsed query is empty or invalid, return false.
 		if not parsed_statements:
 			return False
+
+		# Explicitly allow statement types that are read-only at the 
+		# root level.
+		allowed_root_types = (
+			exp.Select,
+			exp.Union,
+			exp.Expression,  # Base wrapper for standard expressions
+		)
 
 		# Define expression types that modify data or schema.
 		write_types = (
@@ -76,7 +277,7 @@ def is_read_only_query(query: str) -> bool:
 			exp.Create,
 			exp.Drop,
 			exp.Alter,
-			exp.Truncate,
+			# exp.Truncate,
 			exp.Command,  # <- Covers things like PRAGMA writes, VACUUM, etc. if desired
 		)
 
@@ -88,20 +289,25 @@ def is_read_only_query(query: str) -> bool:
 				return False
 
 			# If the statement is one of the write types, return False.
-			if isinstance(statement, write_types):
+			# if isinstance(statement, write_types):
+			if not isinstance(statement, allowed_root_types):# or isinstance(statement, exp.Command):
+				print(f"Disallowed root statement type detected: {type(statement).__name__}")
 				return False
 
 			# Go down the AST to ensure no subqueries or CTEs contain 
 			# mutations. Return false if the subquery contains any write 
 			# types.
-			for node in statement.find_all(Expression=True):
+			# for node in statement.find_all(Expression=True):
+			for node in statement.walk():
 				if isinstance(node, write_types):
+					print(f"Disallowed subquery/CTE statement type detected: {type(node).__name__}")
 					return False
 
 		# If none of the statements are write types, return True.
 		return True
-	except Exception:
+	except Exception as e:
 		# If the query can't be parsed correctly, return false.
+		print(f"Query parsing failed for: {query}\nError: {e}")
 		return False
 
 
@@ -110,14 +316,20 @@ if __name__ == '__main__':
 	# Tests
 	###################################################################
 
-	# Get the schema.
+	# Get the schema and database metadata.
 	print(get_db_schema())
+	print(get_tables())
+	print(get_metadata_db_schema())
+	print(get_metadata_tables())
+	print(get_metadata())
+	print(len(get_metadata().splitlines()))
+	print(len(get_metadata()))
 
-	# Test read-only query detection.
-	print(is_read_only_query("SELECT * FROM fec_cm WHERE CMTE_ST = 'CA';")) 
-	# Output: True
-	print(is_read_only_query("UPDATE fec_cm SET CMTE_NM = 'Hacked' WHERE CMTE_ID = '123';")) 
-	# Output: False
-	print(is_read_only_query("SELECT * FROM fec_cm; DROP TABLE aux_congress;")) 
-	# Output: False (Catches multi-statement injection attempts)
+	# # Test read-only query detection.
+	# print(is_read_only_query("SELECT * FROM fec_cm WHERE CMTE_ST = 'CA';")) 
+	# # Output: True
+	# print(is_read_only_query("UPDATE fec_cm SET CMTE_NM = 'Hacked' WHERE CMTE_ID = '123';")) 
+	# # Output: False
+	# print(is_read_only_query("SELECT * FROM fec_cm; DROP TABLE aux_congress;")) 
+	# # Output: False (Catches multi-statement injection attempts)
 
