@@ -2,6 +2,10 @@
 
 This is a proof-of-concept for building out an agent that allows layman users to interact with SQL databases and perform analysis around that data.
 
+The workflow extracts the longest SQL candidate from model responses, ignoring
+thinking sections. It supports SQL Markdown fences and unfenced statements;
+if extraction fails, the workflow retries with the extraction error. Extraction
+does not validate whether a query is safe to execute.
 
 ### Notes
 
