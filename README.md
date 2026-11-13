@@ -7,6 +7,37 @@ thinking sections. It supports SQL Markdown fences and unfenced statements;
 if extraction fails, the workflow retries with the extraction error. Extraction
 does not validate whether a query is safe to execute.
 
+### Docker
+
+Build the workflow image using the minimal Conda environment in
+`env-docker.yml`:
+
+```sh
+docker build -t chat-sqlite-workflow .
+```
+
+Run it with a directory containing both `fec_data.db` and `fec_metadata.db`:
+
+```sh
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  --mount type=bind,source="$(pwd)",target=/data \
+  chat-sqlite-workflow
+```
+
+The database directory must be writable because SQLite uses WAL files. The
+workflow runs the example query in `workflow.py`, prints its answer, and exits.
+Only mount data the workflow is allowed to modify; generated SQL is not
+validated as read-only.
+
+The image connects to Ollama at `http://host.docker.internal:11434` by default.
+Ollama must be running and reachable from the container, with
+`lfm2.5-thinking:1.2b` and `qwen2.5-coder:1.5b` available. Override the address
+with `-e OLLAMA_URL=http://your-ollama-host:11434` if needed. On Linux, add
+`--add-host host.docker.internal:host-gateway` to use the host gateway. Ollama
+may need to listen on an address reachable from the container rather than
+only `127.0.0.1`; restrict network access appropriately.
+
 ### Notes
 
  - Data

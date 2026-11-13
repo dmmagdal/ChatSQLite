@@ -7,7 +7,6 @@
 import sqlite3
 from typing import List
 
-import pandas as pd
 import sqlglot
 from sqlglot import exp
 
