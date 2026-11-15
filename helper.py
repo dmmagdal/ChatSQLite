@@ -208,6 +208,14 @@ def get_filtered_db_schema(tables: List[str]) -> str:
 	return schema
 
 
+TABLE_METADATA_MAP = {
+	"fec_cn": "all_candidates_table",
+	"fec_cm": "committee_master_table",
+	"fec_pas2": "committee_contributions_table",
+	"fec_oth": "committee_contributions_table",
+}
+
+
 def get_filtered_metadata(tables: List[str]) -> str:
 	"""
 	Retrieve the metadata for specified tables in the metadata database.
@@ -223,17 +231,24 @@ def get_filtered_metadata(tables: List[str]) -> str:
 
 	# Initialise the metadata string to accumulate results.
 	metadata = ""
+	seen_meta_tables = set()
 
 	# Iterate through each specified table and retrieve its metadata.
 	for table in tables:
-		meta_table = f"{table}_table"
+		target_meta = TABLE_METADATA_MAP.get(table)
+		if not target_meta:
+			candidate = f"{table}_table"
+			if candidate in all_metadata_tables:
+				target_meta = candidate
+			elif table in all_metadata_tables:
+				target_meta = table
 
-		if meta_table not in all_metadata_tables:
-			# Retrieve the metadata for the specified table in the database.
-			metadata += f"\n--- Metadata for table: {table} ---\n"
+		if target_meta and target_meta not in seen_meta_tables:
+			seen_meta_tables.add(target_meta)
+			metadata += f"\n--- Metadata for table: {table} ({target_meta}) ---\n"
 			metadata += "\n".join(
 				"|".join(str(item) for item in result)
-				for result in conn.execute(f"SELECT * FROM {table};").fetchall()
+				for result in conn.execute(f"SELECT * FROM {target_meta};").fetchall()
 				if isinstance(result, tuple)
 			)
 			metadata += "\n"  # Add a newline between tables for clarity.

@@ -11,3 +11,6 @@
 
 # Reference html files.
 **/*.html
+
+# Evaluation & testing output files.
+eval_matrix.json

@@ -3,12 +3,12 @@
 
 import sqlite3
 import re
+import os
 from typing import List, Dict, Any, Tuple, TypedDict, Annotated
 
 from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END
-import pandas as pd
 from sqlglot import parse, parse_one, transpile
 from sqlglot.errors import ParseError, TokenError
 
@@ -32,10 +32,11 @@ class AgentState(TypedDict):
 
 
 # Initialize Ollama model(s).
-OLLAMA_URL = "http://localhost:11434"
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 # chat = ChatOllama(model="phi4-mini-reasoning:3.8b", base_url=OLLAMA_URL, temperature=0.0)
 chat = ChatOllama(model="lfm2.5-thinking:1.2b", base_url=OLLAMA_URL, temperature=0.0)
-sql = ChatOllama(model="qwen2.5-coder:1.5b", base_url=OLLAMA_URL)
+# sql = ChatOllama(model="qwen2.5-coder:1.5b", base_url=OLLAMA_URL)
+sql = ChatOllama(model="qwen2.5-coder:1.5b", base_url=OLLAMA_URL, temperature=0.0)
 coder = ChatOllama(model="qwen2.5-coder:1.5b", base_url=OLLAMA_URL)
 
 
